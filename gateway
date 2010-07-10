@@ -1,0 +1,60 @@
+#!/usr/local/python/bin/python
+try:
+    from twisted.internet import pollreactor 
+    pollreactor.install()
+except: pass
+import sys, simplejson, os
+from twisted.python     import log
+from twisted.internet   import reactor, interfaces, defer
+from twisted.names      import server, client, common, dns, error, cache
+from twisted.web        import client as http, error as http_error
+from twisted.application import service, internet
+from zope.interface     import implements
+
+class WebResolver(common.ResolverBase):
+    implements(interfaces.IResolver)
+    
+    def __init__(self, base_url):
+        common.ResolverBase.__init__(self)
+        self.base_url = base_url
+        
+    @defer.inlineCallbacks
+    def _lookup(self, name, cls, type, timeout):
+        url = "/".join([self.base_url, dns.QUERY_CLASSES[cls], name, dns.QUERY_TYPES[type]])
+        try:
+            result = yield http.getPage(url)
+        except http_error.Error, e:
+            result = e.response
+        
+        message = simplejson.loads(result)
+        if message['header']['rcode'] == 'NXDOMAIN':
+            raise dns.DomainError()
+        for section in ['answer', 'authority', 'additional']:
+            message[section] = map(self._parse_record, message.get(section, []))
+            
+        defer.returnValue(
+            (message['answer'], message['authority'], message['additional']))
+    
+    def _parse_record(self, d):
+        if isinstance(d['rdata'], str):
+            d['rdata'] = [d['rdata']]
+        klass = getattr(dns, "Record_%s" % d['type'])
+        return dns.RRHeader(
+            d['name'], 
+            getattr(dns, d['type']), 
+            getattr(dns, d['class']), 
+            d['ttl'], 
+            klass(*d['rdata'], **dict(ttl=d['ttl'])))
+    
+cacher      = cache.CacheResolver(verbose=1)
+resolver    = WebResolver(os.environ.get("BASE_URL", "http://2.latest.domdori.appspot.com/dns"))
+factory     = server.DNSServerFactory([cacher, resolver], [cacher], verbose=1)
+protocol    = dns.DNSDatagramProtocol(factory)    
+
+if __name__ == "__main__":
+    log.startLogging(sys.stdout)
+    reactor.listenUDP(int(os.environ.get("PORT", 1053)), protocol)
+    reactor.run()
+else:
+    application = service.Application('webdns-gateway')
+    internet.UDPServer(int(os.environ.get("PORT", 53)), protocol).setServiceParent(application)
