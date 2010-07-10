@@ -36,8 +36,8 @@ class WebResolver(common.ResolverBase):
             (message['answer'], message['authority'], message['additional']))
     
     def _parse_record(self, d):
-        if isinstance(d['rdata'], str):
-            d['rdata'] = [d['rdata']]
+        if not isinstance(d['rdata'], list):
+            d['rdata'] = d['rdata'].split(' ')
         klass = getattr(dns, "Record_%s" % d['type'])
         return dns.RRHeader(
             d['name'], 
