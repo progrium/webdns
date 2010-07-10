@@ -11,6 +11,8 @@ from twisted.web        import client as http, error as http_error
 from twisted.application import service, internet
 from zope.interface     import implements
 
+def opt(name, default=None, cast=str): return cast(os.environ.get(name, default))
+
 class WebResolver(common.ResolverBase):
     implements(interfaces.IResolver)
     
@@ -21,6 +23,8 @@ class WebResolver(common.ResolverBase):
     @defer.inlineCallbacks
     def _lookup(self, name, cls, type, timeout):
         url = "/".join([self.base_url, dns.QUERY_CLASSES[cls], name, dns.QUERY_TYPES[type]])
+        if not opt('SILENT', False, bool):
+            log.msg(url)
         try:
             result = yield http.getPage(url)
         except http_error.Error, e:
@@ -46,15 +50,18 @@ class WebResolver(common.ResolverBase):
             d['ttl'], 
             klass(*d['rdata'], **dict(ttl=d['ttl'])))
     
-cacher      = cache.CacheResolver(verbose=1)
-resolver    = WebResolver(os.environ.get("BASE_URL", "http://2.latest.domdori.appspot.com/dns"))
-factory     = server.DNSServerFactory([cacher, resolver], [cacher], verbose=1)
+# Supress noisy http client
+http.HTTPClientFactory.noisy = opt('VERBOSE', False, bool)
+
+cacher      = cache.CacheResolver(verbose=opt('VERBOSE', 0, int))
+resolver    = WebResolver(opt('BASE_URL', "http://2.latest.domdori.appspot.com/dns"))
+factory     = server.DNSServerFactory([cacher, resolver], [cacher], verbose=opt('VERBOSE', 0, int))
 protocol    = dns.DNSDatagramProtocol(factory)    
 
 if __name__ == "__main__":
     log.startLogging(sys.stdout)
-    reactor.listenUDP(int(os.environ.get("PORT", 1053)), protocol)
+    reactor.listenUDP(opt('PORT', 1053, int), protocol)
     reactor.run()
 else:
     application = service.Application('webdns-gateway')
-    internet.UDPServer(int(os.environ.get("PORT", 53)), protocol).setServiceParent(application)
+    internet.UDPServer(opt('PORT', 53, int), protocol).setServiceParent(application)
