@@ -1,4 +1,4 @@
-#!/usr/local/python/bin/python
+#!/usr/local/bin/python
 try:
     from twisted.internet import pollreactor 
     pollreactor.install()
@@ -18,21 +18,27 @@ class WebResolver(common.ResolverBase):
     
     def __init__(self, base_url):
         common.ResolverBase.__init__(self)
-        self.base_url = base_url
+        self.base_url   = base_url
+        self.refused    = []
         
     @defer.inlineCallbacks
     def _lookup(self, name, cls, type, timeout):
         url = "/".join([self.base_url, dns.QUERY_CLASSES[cls], name, dns.QUERY_TYPES[type]])
         if not opt('SILENT', False, bool):
             log.msg(url)
+            
         try:
             result = yield http.getPage(url)
         except http_error.Error, e:
             result = e.response
-        
         message = simplejson.loads(result)
+        
         if message['header']['rcode'] == 'NXDOMAIN':
             raise dns.DomainError()
+        if message['header']['rcode'] == 'REFUSED':
+            self.refused.append(name)
+            raise dns.DomainError()
+        
         for section in ['answer', 'authority', 'additional']:
             message[section] = map(self._parse_record, message.get(section, []))
             
@@ -41,7 +47,7 @@ class WebResolver(common.ResolverBase):
     
     def _parse_record(self, d):
         if not isinstance(d['rdata'], list):
-            d['rdata'] = d['rdata'].split(' ')
+            d['rdata'] = str(d['rdata']).split(' ')
         klass = getattr(dns, "Record_%s" % d['type'])
         return dns.RRHeader(
             d['name'], 
@@ -50,12 +56,21 @@ class WebResolver(common.ResolverBase):
             d['ttl'], 
             klass(*d['rdata'], **dict(ttl=d['ttl'])))
     
+class WebDNSServerFactory(server.DNSServerFactory):
+    def __init__(self, authority, cache, verbose=0):
+        server.DNSServerFactory.__init__(self, [cache, authority], [cache], verbose=verbose)
+        self.authority = authority
+        
+    def allowQuery(self, message, protocol, address):
+        return server.DNSServerFactory.allowQuery(self, message, protocol, address) and \
+            not str(message.queries[0].name) in self.authority.refused
+
 # Supress noisy http client
 http.HTTPClientFactory.noisy = opt('VERBOSE', False, bool)
 
 cacher      = cache.CacheResolver(verbose=opt('VERBOSE', 0, int))
 resolver    = WebResolver(opt('BASE_URL', "http://2.latest.domdori.appspot.com/dns"))
-factory     = server.DNSServerFactory([cacher, resolver], [cacher], verbose=opt('VERBOSE', 0, int))
+factory     = WebDNSServerFactory(resolver, cacher, verbose=opt('VERBOSE', 0, int))
 protocol    = dns.DNSDatagramProtocol(factory)    
 
 if __name__ == "__main__":
