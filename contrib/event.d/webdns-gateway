@@ -10,6 +10,9 @@ stop on runlevel 4
 stop on runlevel 5
 stop on runlevel 6
 
-chdir /webdns/git
-exec /usr/local/bin/twistd --pidfile=../pid/webdns-gateway.pid --logfile=../log/webdns-gateway.log -ny gateway
+chdir /runproc/webdns
+script
+  . ./environ
+  exec twistd --pidfile=$PIDFILE -ny gateway >> $LOGFILE
+end script
 respawn
